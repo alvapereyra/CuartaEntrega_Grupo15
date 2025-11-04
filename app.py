@@ -5,6 +5,13 @@ import joblib
 import numpy as np
 import datetime
 
+# --- Configuración de la Página ---
+st.set_page_config(
+    page_title="Análisis y Predicción de Posiciones NBA",
+    page_icon="🏀",
+    layout="wide"
+)
+
 # --- FUNCIONES DE TRANSFORMACIÓN DEL PIPELINE ---
 # Estas funciones DEBEN estar definidas en el script para que
 # joblib.load() pueda encontrar las referencias del pipeline.
@@ -59,18 +66,6 @@ def calculate_stats_36min(df):
     return out_df.values
 
 # -----------------------------------------------
-
-@st.cache_resource
-def load_model():
-    """Carga el modelo de predicción (pipeline) desde el archivo .pkl"""
-    # ... (el resto de tu función load_model sigue igual) ...
-
-# --- Configuración de la Página ---
-st.set_page_config(
-    page_title="Análisis y Predicción de Posiciones NBA",
-    page_icon="🏀",
-    layout="wide"
-)
 
 # --- Carga de Activos (Modelo y Datos) ---
 
