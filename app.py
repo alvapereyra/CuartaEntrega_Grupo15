@@ -5,6 +5,66 @@ import joblib
 import numpy as np
 import datetime
 
+# --- FUNCIONES DE TRANSFORMACIÓN DEL PIPELINE ---
+# Estas funciones DEBEN estar definidas en el script para que
+# joblib.load() pueda encontrar las referencias del pipeline.
+
+def calculate_age(df):
+    """
+    Toma un array de NumPy con una columna 'birthdate', 
+    la convierte a edad y la retorna como un array 2D.
+    """
+    # El pipeline pasa un array de NumPy
+    birthdate = pd.to_datetime(df[:, 0], errors='coerce')
+    
+    # Fecha de la consigna
+    today = datetime.datetime(2025, 10, 22)
+    
+    # El resultado (today - birthdate) es un TimedeltaIndex.
+    # Se accede a los días con .days, no con .dt.days
+    age = (today - birthdate).days / 365.25
+    
+    # Retorna como array 2D para que el pipeline lo entienda
+    return age.values.reshape(-1, 1) 
+
+def calculate_stats_36min(df):
+    """
+    Toma un array de NumPy con las 8 columnas de 'features_stats',
+    calcula las métricas "por 36 minutos" (incluyendo Pts 2/3)
+    y las retorna como un array 2D.
+    """
+    # El pipeline pasa un array de NumPy. Lo convertimos de nuevo a
+    # DataFrame con los nombres de columna correctos para poder procesarlo.
+    column_names = ['points', 'numMinutes', 'reboundsTotal', 'blocks', 'assists', 'steals', 'threePointersMade', 'freeThrowsMade']
+    stats = pd.DataFrame(df, columns=column_names)
+
+    # Evitar división por cero
+    mask = stats["numMinutes"] > 0
+    factor = np.where(mask, 36.0 / stats["numMinutes"], 0) 
+    
+    # --- Dividir Puntos --- 
+    pts_from_3 = stats["threePointersMade"] * 3
+    pts_from_2 = stats["points"] - pts_from_3 - stats["freeThrowsMade"]
+    pts_from_2 = np.clip(pts_from_2, 0, None) 
+    
+    # --- Aplicar el factor de 36 minutos --- 
+    out_df = pd.DataFrame(index=stats.index)
+    out_df["reb36Min"] = stats["reboundsTotal"] * factor
+    out_df["blk36Min"] = stats["blocks"] * factor
+    out_df["ast36Min"] = stats["assists"] * factor
+    out_df["stl36Min"] = stats["steals"] * factor
+    out_df["pts_from_2_36Min"] = pts_from_2 * factor
+    out_df["pts_from_3_36Min"] = pts_from_3 * factor
+    
+    return out_df.values
+
+# -----------------------------------------------
+
+@st.cache_resource
+def load_model():
+    """Carga el modelo de predicción (pipeline) desde el archivo .pkl"""
+    # ... (el resto de tu función load_model sigue igual) ...
+
 # --- Configuración de la Página ---
 st.set_page_config(
     page_title="Análisis y Predicción de Posiciones NBA",
