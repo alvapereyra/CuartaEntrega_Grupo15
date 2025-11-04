@@ -218,7 +218,7 @@ else:
     with tab1:
         st.header("Gráfico 1: Perfil de Rol (Asistencias vs. Rebotes)")
         st.markdown("""
-        Este gráfico (traído de la Entrega 4) justifica por qué el modelo puede separar las posiciones.
+        Este gráfico justifica por qué el modelo puede separar las posiciones.
         * **Asistencias:** Las cajas no se solapan. Los **Guardias (G)** son una clase aparte en *playmaking*.
         * **Rebotes:** Vemos la relación inversa. Los **Pivots (C)** dominan la pintura, seguidos por los Aleros (F).
         """)
@@ -244,14 +244,14 @@ else:
         ).properties(
             title='Rol: Presencia en Pintura (Rebotes)'
         )
-        final_chart1 = alt.hconcat(chart_ast, chart_reb).interactive()
+        final_chart1 = alt.hconcat(chart_ast, chart_reb)
         
         st.altair_chart(final_chart1, use_container_width=True)
 
     with tab2:
         st.header("Gráfico 2: Perfil Físico (Altura vs. Peso)")
         st.markdown("""
-        Este heatmap facetado (traído de la Entrega 4) muestra las "huellas" físicas de cada posición.
+        Este heatmap facetado muestra las "huellas" físicas de cada posición.
         Vemos 3 *clusters* claros que el modelo usa para predecir:
         * **Guardias (G):** Cluster en la esquina inferior-izquierda (bajos y ligeros).
         * **Pivots (C):** Cluster en la esquina superior-derecha (altos y pesados).
@@ -281,8 +281,7 @@ else:
     with tab3:
         st.header("Gráfico 3: ¿Qué Features usa el Modelo para Predecir?")
         st.markdown("""
-        Este gráfico muestra los resultados de la celda 7.3 de la Entrega 3.
-        Confirma que las **`height`, `reb36Min`, `bodyWeight` y `ast36Min`** son las variables más decisivas 
+        Este gráfico confirma que las **`height`, `reb36Min`, `bodyWeight` y `ast36Min`** son las variables más decisivas 
         para el modelo de Random Forest.
         """)
         
