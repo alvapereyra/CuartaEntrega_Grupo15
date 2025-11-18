@@ -5,306 +5,288 @@ import joblib
 import numpy as np
 import datetime
 
-# --- Configuración de la Página ---
+# --- CONFIGURACIÓN INICIAL ---
 st.set_page_config(
-    page_title="Análisis y Predicción de Posiciones NBA",
+    page_title="NBA Position Predictor - Grupo 15",
     page_icon="🏀",
     layout="wide"
 )
 
-# --- FUNCIONES DE TRANSFORMACIÓN DEL PIPELINE ---
-# Estas funciones DEBEN estar definidas en el script para que
-# joblib.load() pueda encontrar las referencias del pipeline.
+# --- FUNCIONES HELPER DEL MODELO (NECESARIAS PARA JOBLIB) ---
+# Estas funciones deben ser idénticas a las definidas en el notebook de entrenamiento V4
 
 def calculate_age(df):
-    """
-    Toma un array de NumPy con una columna 'birthdate', 
-    la convierte a edad y la retorna como un array 2D.
-    """
-    # El pipeline pasa un array de NumPy
-    birthdate = pd.to_datetime(df[:, 0], errors='coerce')
-    
-    # Fecha de la consigna
-    today = datetime.datetime(2025, 10, 22)
-    
-    # El resultado (today - birthdate) es un TimedeltaIndex.
-    # Se accede a los días con .days, no con .dt.days
-    age = (today - birthdate).days / 365.25
-    
-    # Retorna como array 2D para que el pipeline lo entienda
-    return age.values.reshape(-1, 1) 
+    # Ojo: El pipeline en producción recibe arrays de numpy, hay que manejarlo
+    try:
+        # Intenta convertir asumiendo que es un DataFrame/Series o Array
+        if isinstance(df, pd.DataFrame) or isinstance(df, pd.Series):
+             birthdate = pd.to_datetime(df.iloc[:, 0], errors='coerce')
+        else:
+             birthdate = pd.to_datetime(df[:, 0], errors='coerce')
+             
+        today = datetime.datetime(2025, 10, 22)
+        # Manejo seguro de dt.days vs .days dependiendo del tipo de objeto
+        age = (today - birthdate).dt.days / 365.25 if hasattr((today - birthdate), 'dt') else (today - birthdate).days / 365.25
+        return age.values.reshape(-1, 1)
+    except:
+        # Fallback básico por si el formato de entrada varía inesperadamente
+        return np.zeros((len(df), 1))
 
-def calculate_stats_36min(df):
-    """
-    Toma un array de NumPy con las 8 columnas de 'features_stats',
-    calcula las métricas "por 36 minutos" (incluyendo Pts 2/3)
-    y las retorna como un array 2D.
-    """
-    # El pipeline pasa un array de NumPy. Lo convertimos de nuevo a
-    # DataFrame con los nombres de columna correctos para poder procesarlo.
-    column_names = ['points', 'numMinutes', 'reboundsTotal', 'blocks', 'assists', 'steals', 'threePointersMade', 'freeThrowsMade']
-    stats = pd.DataFrame(df, columns=column_names)
+def calculate_stats_36min_from_acum(df_acum):
+    # Reconstruimos el DF temporalmente con los nombres esperados por la logica
+    column_names = ['points_acum', 'numMinutes_acum', 'reboundsTotal_acum', 'blocks_acum', 
+                    'assists_acum', 'steals_acum', 'threePointersMade_acum', 'fieldGoalsMade_acum']
+    
+    # Manejo de entrada (puede ser array numpy desde el pipeline)
+    if isinstance(df_acum, np.ndarray):
+        stats = pd.DataFrame(df_acum, columns=column_names)
+    else:
+        stats = df_acum.copy()
+        stats.columns = column_names
 
-    # Evitar división por cero
-    mask = stats["numMinutes"] > 0
-    factor = np.where(mask, 36.0 / stats["numMinutes"], 0) 
-    
-    # --- Dividir Puntos --- 
-    pts_from_3 = stats["threePointersMade"] * 3
-    pts_from_2 = stats["points"] - pts_from_3 - stats["freeThrowsMade"]
-    pts_from_2 = np.clip(pts_from_2, 0, None) 
-    
-    # --- Aplicar el factor de 36 minutos --- 
+    total_minutes = stats['numMinutes_acum']
+    # Evitar división por 0 reemplazando 0 por 1 (solo para el cálculo)
+    total_minutes = total_minutes.replace(0, 1) 
+
     out_df = pd.DataFrame(index=stats.index)
-    out_df["reb36Min"] = stats["reboundsTotal"] * factor
-    out_df["blk36Min"] = stats["blocks"] * factor
-    out_df["ast36Min"] = stats["assists"] * factor
-    out_df["stl36Min"] = stats["steals"] * factor
-    out_df["pts_from_2_36Min"] = pts_from_2 * factor
-    out_df["pts_from_3_36Min"] = pts_from_3 * factor
+    out_df["reb36Min"] = (stats["reboundsTotal_acum"] / total_minutes) * 36
+    out_df["blk36Min"] = (stats["blocks_acum"] / total_minutes) * 36
+    out_df["ast36Min"] = (stats["assists_acum"] / total_minutes) * 36
+    out_df["stl36Min"] = (stats["steals_acum"] / total_minutes) * 36
+    out_df["pts_from_3_36Min"] = (stats["threePointersMade_acum"] * 3 / total_minutes) * 36
+    
+    tiros_de_2_metidos = stats["fieldGoalsMade_acum"] - stats["threePointersMade_acum"]
+    out_df["pts_from_2_36Min"] = (tiros_de_2_metidos * 2 / total_minutes) * 36
+    
+    out_df = out_df.clip(lower=0)
     
     return out_df.values
 
-# -----------------------------------------------
-
-# --- Carga de Activos (Modelo y Datos) ---
+# --- CARGA DE DATOS Y MODELO ---
 
 @st.cache_resource
 def load_model():
-    """Carga el modelo de predicción (pipeline) desde el archivo .pkl"""
-    try:
-        # Este archivo fue generado por la Entrega 3
-        model = joblib.load("nba_position_model.pkl")
-        return model
-    except FileNotFoundError:
-        st.error("Error: Archivo 'nba_position_model.pkl' no encontrado.")
-        return None
-    except Exception as e:
-        st.error(f"Error al cargar el modelo: {e}")
-        return None
+    # Asegúrate de que 'nba_position_model.pkl' esté en la misma carpeta
+    return joblib.load("nba_position_model.pkl")
 
 @st.cache_data
 def load_data():
-    """Carga el DataFrame limpio para las visualizaciones"""
-    try:
-        # Este archivo fue generado al final de la Entrega 3
-        df = pd.read_csv("players_nba_clean_viz.csv")
-        return df
-    except FileNotFoundError:
-        st.error("Error: Archivo 'players_nba_clean_viz.csv' no encontrado.")
-        return pd.DataFrame() # Retorna DF vacío para evitar más errores
-    except Exception as e:
-        st.error(f"Error al cargar los datos: {e}")
-        return pd.DataFrame()
+    # Asegúrate de que 'players_nba_clean_viz.csv' esté en la misma carpeta
+    return pd.read_csv("players_nba_clean_viz.csv")
 
-model = load_model()
-df_viz = load_data()
+try:
+    model = load_model()
+    df_viz = load_data()
+except Exception as e:
+    st.error(f"Error crítico cargando archivos: {e}")
+    st.stop()
 
-# --- Definición de Columnas (para el formulario) ---
-# Estas deben coincidir EXACTAMENTE con las 'ALL_FEATURES' del notebook de la Entrega 3
-features_num_simple = ['height', 'bodyWeight']
-features_cat = ['country']
-features_age = ['birthdate']
-features_stats = [
-    'points', 'numMinutes', 'reboundsTotal', 'blocks', 
-    'assists', 'steals', 'threePointersMade', 'freeThrowsMade'
-]
-ALL_FEATURES = features_num_simple + features_cat + features_age + features_stats
+# --- PESTAÑAS DE LA APLICACIÓN ---
+tab_info, tab_viz, tab_pred = st.tabs(["📘 Explicación del Modelo", "📊 Exploración de Datos", "🔮 Predicción Interactiva"])
 
-# Obtenemos una lista de países únicos del CSV de la Entrega 1
-# Por ahora, usamos una lista hardcodeada con los más comunes.
-COUNTRIES = [
-    'USA', 'Canada', 'France', 'Spain', 'Serbia', 'Germany', 'Australia', 
-    'Nigeria', 'Turkey', 'Brazil', 'Argentina', 'Lithuania', 'Otro'
-]
+# ==============================================================================
+# PESTAÑA 1: EXPLICACIÓN DEL MODELO
+# ==============================================================================
+with tab_info:
+    st.title("🏀 Clasificador de Posiciones NBA")
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown("""
+        ### El Problema
+        En la NBA moderna, las posiciones tradicionales (Base, Alero, Pivot) son cada vez más difusas. 
+        Nuestro objetivo fue entrenar un modelo de IA capaz de clasificar a un jugador basándose puramente 
+        en sus **estadísticas de juego** y **atributos físicos**, sin ver su etiqueta oficial.
+
+        ### El Modelo
+        Utilizamos un **Random Forest Classifier** optimizado.
+        * **Accuracy:** ~87%
+        * **F1-Score:** ~83%
+        
+        El modelo aprende patrones complejos: entiende que un Pivot no es solo "alguien alto", 
+        sino alguien que rebotea eficientemente y anota cerca del aro.
+        """)
+    
+    with col2:
+        st.info("💡 **Dato Curioso:** El error más común del modelo es confundir **Aleros (F)** con **Pivots (C)**, lo cual refleja la evolución de los 'Small-Ball Centers' en la liga.")
+
+    st.divider()
+    st.subheader("¿Qué mira el modelo? (Importancia de Features)")
+    
+    # Datos hardcodeados de la Entrega 3 para visualización rápida
+    imp_data = pd.DataFrame({
+        'Feature': ['Altura', 'Rebotes/36', 'Peso', 'Asistencias/36', 'Bloqueos/36', 'Edad', 'Pts Dobles', 'Pts Triples', 'Robos'],
+        'Importancia': [0.24, 0.13, 0.12, 0.11, 0.085, 0.082, 0.066, 0.065, 0.064]
+    })
+    
+    c_imp = alt.Chart(imp_data).mark_bar(color='#FF4B4B').encode(
+        x=alt.X('Importancia', title='Peso en la decisión'),
+        y=alt.Y('Feature', sort='-x', title='Atributo'),
+        tooltip=['Feature', 'Importancia']
+    ).properties(height=300)
+    st.altair_chart(c_imp, use_container_width=True)
 
 
-# --- Sidebar (Interfaz de Predicción) ---
-# Esta sección cumple con la consigna de "ofrecer una interfaz sencilla 
-# para que un usuario final pueda ingresar datos nuevos y probar el modelo entrenado"
+# ==============================================================================
+# PESTAÑA 2: EXPLORACIÓN (GRAFICOS ENTREGA 4)
+# ==============================================================================
+with tab_viz:
+    st.header("Explorando los Patrones")
+    
+    st.markdown("### 1. Roles de Juego: Asistencias vs. Rebotes")
+    st.write("Este gráfico separa claramente a los creadores de juego (Guardias) de los definidores interiores (Pivots).")
+    
+    # Gráfico Boxplot Horizontal
+    c_base = alt.Chart(df_viz).mark_boxplot(extent='min-max', size=30).encode(
+        y=alt.Y('dom_pos', title=None),
+        color=alt.Color('dom_pos', legend=None)
+    ).properties(height=200)
+    
+    c1 = c_base.encode(x=alt.X('ast36Min', title='Asistencias p/36m')).properties(title='Distribución de Asistencias')
+    c2 = c_base.encode(x=alt.X('reb36Min', title='Rebotes p/36m')).properties(title='Distribución de Rebotes')
+    
+    st.altair_chart(c1 | c2, use_container_width=True)
+    
+    st.divider()
+    
+    st.markdown("### 2. Perfil Físico: Altura vs. Peso")
+    st.write("Usamos Coordenadas Paralelas para ver el perfil promedio de cada posición.")
+    
+    # Coordenadas Paralelas (Promedios)
+    feats = ['height', 'bodyWeight', 'reb36Min', 'ast36Min', 'pts_from_3_36Min']
+    df_norm = df_viz.copy()
+    for f in feats:
+        df_norm[f] = df_norm[f].rank(pct=True)
+    
+    df_avg = df_norm.groupby('dom_pos')[feats].mean().reset_index().melt('dom_pos')
+    
+    c_parallel = alt.Chart(df_avg).mark_line(point=True, strokeWidth=3).encode(
+        x=alt.X('variable', title='Atributo'),
+        y=alt.Y('value', title='Percentil (0-100%)', scale=alt.Scale(domain=[-0.1, 1.1])),
+        color=alt.Color('dom_pos', title='Posición'),
+        tooltip=['dom_pos', 'variable', alt.Tooltip('value', format='.2%')]
+    ).properties(height=400).interactive()
+    
+    st.altair_chart(c_parallel, use_container_width=True)
 
-st.sidebar.image("https://cdn.freebiesupply.com/images/large/2x/nba-logo-transparent.png", width=150)
-st.sidebar.title("Predecir Posición de Jugador")
-st.sidebar.markdown("Ingresa los atributos (promedios por partido) de un jugador para predecir su posición (G, F o C).")
 
-# Creamos un diccionario para guardar los inputs
-user_input = {}
-
-st.sidebar.header("Atributos Físicos")
-user_input['birthdate'] = st.sidebar.date_input("Fecha de Nacimiento", 
-                                                datetime.date(1998, 1, 1),
-                                                min_value=datetime.date(1970, 1, 1),
-                                                max_value=datetime.date(2008, 1, 1))
-# Corregimos las etiquetas a pulgadas y libras
-user_input['height'] = st.sidebar.slider("Altura (pulgadas)", 70, 90, 77)
-user_input['bodyWeight'] = st.sidebar.slider("Peso (libras)", 160, 320, 210)
-user_input['country'] = st.sidebar.selectbox("País", COUNTRIES, index=COUNTRIES.index('USA'))
-
-st.sidebar.header("Estadísticas (Promedios por Partido)")
-col1, col2 = st.sidebar.columns(2)
-user_input['numMinutes'] = col1.slider("Minutos", 0.0, 40.0, 25.0, 0.1)
-user_input['points'] = col2.slider("Puntos", 0.0, 40.0, 15.0, 0.1)
-user_input['reboundsTotal'] = col1.slider("Rebotes", 0.0, 15.0, 5.0, 0.1)
-user_input['assists'] = col2.slider("Asistencias", 0.0, 12.0, 3.0, 0.1)
-user_input['blocks'] = col1.slider("Bloqueos", 0.0, 4.0, 0.5, 0.1)
-user_input['steals'] = col2.slider("Robos", 0.0, 3.0, 0.8, 0.1)
-user_input['threePointersMade'] = col1.slider("Triples Metidos", 0.0, 5.0, 1.5, 0.1)
-user_input['freeThrowsMade'] = col2.slider("Libres Metidos", 0.0, 10.0, 3.0, 0.1)
-
-# Botón de predicción
-if st.sidebar.button("Predecir Posición", use_container_width=True, type="primary"):
-    if model is None:
-        st.error("El modelo no está cargado. No se puede predecir.")
+# ==============================================================================
+# PESTAÑA 3: PREDICCIÓN (SIMULADOR DE JUGADORES)
+# ==============================================================================
+with tab_pred:
+    st.header("Simulador de Predicción")
+    st.markdown("Busca un jugador real de la base de datos para ver cómo lo clasifica el modelo.")
+    
+    # 1. Buscador de Jugador
+    if 'full_name' in df_viz.columns:
+        player_list = sorted(df_viz['full_name'].unique())
+        # Intentamos poner a LeBron por defecto si existe
+        default_idx = player_list.index("LeBron James") if "LeBron James" in player_list else 0
+        selected_player_name = st.selectbox("Seleccionar Jugador:", player_list, index=default_idx)
     else:
+        st.error("El CSV no tiene la columna 'full_name'. Verifica la generación de datos.")
+        selected_player_name = None
+    
+    if selected_player_name:
+        # Obtener datos del jugador seleccionado
+        player_row = df_viz[df_viz['full_name'] == selected_player_name].iloc[0]
+        
+        # Mostrar ficha del jugador
+        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a.metric("Altura", f"{player_row['height']:.0f}\"")
+        col_b.metric("Peso", f"{player_row['bodyWeight']:.0f} lbs")
+        col_c.metric("Posición Real", player_row['dom_pos'])
+        col_d.metric("Edad", f"{player_row['age']:.1f}")
+
+        # --- PREPARAR INPUT PARA EL MODELO ---
         try:
-            # 1. Convertir 'birthdate' (date) a Timestamp de pandas (que espera el pipeline)
-            user_input['birthdate'] = pd.to_datetime(user_input['birthdate'])
-            
-            # 2. Crear DataFrame de 1 fila
-            user_df = pd.DataFrame([user_input])
-            
-            # 3. Asegurar el orden de las columnas (¡CRUCIAL!)
-            user_df = user_df[ALL_FEATURES]
-            
-            # 4. Hacer la predicción
-            prediction = model.predict(user_df)
-            probability = model.predict_proba(user_df)
-            
-            # 5. Mostrar resultados
-            pos_predicha = prediction[0]
-            prob_max = np.max(probability)
-            
-            st.sidebar.subheader(f"Predicción: ¡{pos_predicha}!")
-            if pos_predicha == 'G':
-                st.sidebar.info("🏀 **Guardia (G)**: Jugador enfocado en asistencias, robos y puntos de triple.")
-            elif pos_predicha == 'F':
-                st.sidebar.info("🔥 **Alero (F)**: Jugador versátil, balanceado entre anotación y rebotes.")
-            elif pos_predicha == 'C':
-                st.sidebar.info("🛡️ **Pivot (C)**: Jugador grande enfocado en rebotes, bloqueos y altura.")
-            
-            st.sidebar.write(f"**Confianza de la predicción:** `{prob_max:.1%}`")
-            
-            # Mostrar probabilidades detalladas
-            prob_df = pd.DataFrame(probability, columns=model.classes_, index=["Probabilidad"])
-            st.sidebar.dataframe(prob_df.style.format("{:.1%}"))
-
-        except Exception as e:
-            st.sidebar.error(f"Error al predecir: {e}")
-            st.sidebar.write("Asegúrate de que 'nba_position_model.pkl' esté actualizado.")
-
-
-# --- Cuerpo Principal de la App (Visualizaciones) ---
-# Esta sección cumple con la consigna de "desarrollar una aplicación en Streamlit 
-# que permita explorar los datos y resultados visualizados"
-
-st.title("🏀 Análisis de Jugadores y Predicción de Posiciones NBA")
-st.markdown(f"""
-Esta aplicación presenta los hallazgos de las Entregas 3 y 4 (Grupo 15).
-Utiliza un modelo `RandomForestClassifier` (F1-Score: **83.0%**) 
-entrenado con datos de jugadores de la NBA para predecir su posición (`G`, `F`, `C`).
-El set de datos para visualización contiene **{len(df_viz)}** jugadores.
-""")
-
-# --- Pestañas para las visualizaciones ---
-tab1, tab2, tab3 = st.tabs([
-    "📊 Gráfico 1: Perfil de Rol (Boxplots)", 
-    "📈 Gráfico 2: Perfil Físico (Heatmap)", 
-    "🏆 Gráfico 3: Importancia de Features"
-])
-
-if df_viz.empty:
-    st.error("No se pudieron cargar los datos para las visualizaciones.")
-else:
-    with tab1:
-        st.header("Gráfico 1: Perfil de Rol (Asistencias vs. Rebotes)")
-        st.markdown("""
-        Este gráfico justifica por qué el modelo puede separar las posiciones.
-        * **Asistencias:** Las cajas no se solapan. Los **Guardias (G)** son una clase aparte en *playmaking*.
-        * **Rebotes:** Vemos la relación inversa. Los **Pivots (C)** dominan la pintura, seguidos por los Aleros (F).
-        """)
-        
-        # --- Chart 1: Boxplots (de la Entrega 4) ---
-        # Gráfico 1a: Distribución de Asistencias
-        chart_ast = alt.Chart(df_viz).mark_boxplot().encode(
-            x=alt.X('dom_pos', title='Posición', sort=['G', 'F', 'C']),
-            y=alt.Y('ast36Min', title='Asistencias por 36 min'),
-            color=alt.Color('dom_pos', title='Posición', legend=None,
-                            scale=alt.Scale(domain=['G', 'F', 'C'], range=['#1f77b4', '#ff7f0e', '#2ca02c'])),
-            tooltip=['dom_pos', alt.Tooltip('ast36Min', title='Mediana Asistencias', format='.2f')]
-        ).properties(
-            title='Rol: Playmaking (Asistencias)'
-        )
-        # Gráfico 1b: Distribución de Rebotes
-        chart_reb = alt.Chart(df_viz).mark_boxplot().encode(
-            x=alt.X('dom_pos', title='Posición', sort=['G', 'F', 'C']),
-            y=alt.Y('reb36Min', title='Rebotes por 36 min'),
-            color=alt.Color('dom_pos', title='Posición', legend=None,
-                            scale=alt.Scale(domain=['G', 'F', 'C'], range=['#1f77b4', '#ff7f0e', '#2ca02c'])),
-            tooltip=['dom_pos', alt.Tooltip('reb36Min', title='Mediana Rebotes', format='.2f')]
-        ).properties(
-            title='Rol: Presencia en Pintura (Rebotes)'
-        )
-        final_chart1 = alt.hconcat(chart_ast, chart_reb)
-        
-        st.altair_chart(final_chart1, use_container_width=True)
-
-    with tab2:
-        st.header("Gráfico 2: Perfil Físico (Altura vs. Peso)")
-        st.markdown("""
-        Este heatmap facetado muestra las "huellas" físicas de cada posición.
-        Vemos 3 *clusters* claros que el modelo usa para predecir:
-        * **Guardias (G):** Cluster en la esquina inferior-izquierda (bajos y ligeros).
-        * **Pivots (C):** Cluster en la esquina superior-derecha (altos y pesados).
-        * **Aleros (F):** Cluster más disperso, ocupando el centro.
-        """)
-        
-        # --- Chart 2: Heatmap Facetado (de la Entrega 4) ---
-        chart2 = alt.Chart(df_viz).mark_rect().encode(
-            x=alt.X('height', 
-                  bin=alt.Bin(maxbins=20), 
-                  title='Altura (pulgadas)'
-                 ),
-            y=alt.Y('bodyWeight', 
-                  bin=alt.Bin(maxbins=20), 
-                  title='Peso (libras)'
-                 ),
-            color=alt.Color('count()', title='Concentración', scale=alt.Scale(range='heatmap')),
-            tooltip=['count()']
-        ).properties(
-            title='Hallazgo 2: Perfil Físico (Dónde se concentra cada posición)'
-        ).facet(
-            column=alt.Column('dom_pos', title='Posición Dominante', sort=['G', 'F', 'C'])
-        ).interactive()
-        
-        st.altair_chart(chart2, use_container_width=True)
-        
-    with tab3:
-        st.header("Gráfico 3: ¿Qué Features usa el Modelo para Predecir?")
-        st.markdown("""
-        Este gráfico confirma que las **`height`, `reb36Min`, `bodyWeight` y `ast36Min`** son las variables más decisivas 
-        para el modelo de Random Forest.
-        """)
-        
-        # --- Chart 3: Importancia de Features (de la Entrega 4) ---
-        # Recreamos el DataFrame de importancia de features
-        feature_data = {
-            'Feature': [
-                'height', 'reb36Min', 'bodyWeight', 'ast36Min', 'blk36Min',
-                'age', 'pts_from_2_36Min', 'pts_from_3_36Min', 'stl36Min'
-            ],
-            'Importance': [
-                0.241873, 0.133539, 0.125515, 0.110660, 0.085263,
-                0.082465, 0.066028, 0.065390, 0.064831
+            # Features requeridas por el pipeline (orden correcto)
+            # Deben estar en el CSV 'players_nba_clean_viz.csv' generado en el notebook
+            input_features = [
+                'height', 'bodyWeight', 'birthdate',
+                'points_acum', 'numMinutes_acum', 'reboundsTotal_acum', 'blocks_acum', 
+                'assists_acum', 'steals_acum', 'threePointersMade_acum', 'fieldGoalsMade_acum'
             ]
-        }
-        df_imp = pd.DataFrame(feature_data)
+            
+            # Extraemos valores y creamos un DF de 1 fila
+            input_data = pd.DataFrame([player_row[input_features]])
+            
+            # --- PREDICCIÓN ---
+            prediction = model.predict(input_data)[0]
+            probs = model.predict_proba(input_data)[0]
+            confidence = np.max(probs)
+            
+            # --- MOSTRAR RESULTADO ---
+            st.divider()
+            c_res1, c_res2 = st.columns([1, 2])
+            
+            with c_res1:
+                st.subheader("El modelo dice:")
+                if prediction == player_row['dom_pos']:
+                    st.success(f"# ¡{prediction}!")
+                    st.caption("Predicción Correcta ✅")
+                else:
+                    st.error(f"# ¡{prediction}!")
+                    st.caption(f"Predicción Incorrecta ❌ (Era {player_row['dom_pos']})")
+                
+                st.progress(float(confidence), text=f"Confianza: {confidence:.1%}")
+            
+            # --- ANÁLISIS DE ERROR (GRÁFICO DE PERFIL / COORDENADAS PARALELAS) ---
+            with c_res2:
+                st.subheader("Análisis del Perfil")
+                st.write("Comparamos el perfil del jugador con el promedio de su posición real y la predicha.")
+                
+                # 1. Features a comparar (normalizadas)
+                radar_feats_viz = ['height', 'reb36Min', 'blk36Min', 'ast36Min', 'pts_from_3_36Min']
+                
+                # Calcular percentiles globales para normalizar (0 a 1)
+                df_norm_radar = df_viz.copy()
+                for f in radar_feats_viz:
+                    df_norm_radar[f] = df_norm_radar[f].rank(pct=True)
+                
+                # Datos del JUGADOR (normalizados)
+                player_norm = df_norm_radar[df_norm_radar['full_name'] == selected_player_name].iloc[0]
+                
+                # Datos promedio de la Posición PREDICHA
+                avg_pred = df_norm_radar[df_norm_radar['dom_pos'] == prediction][radar_feats_viz].mean()
+                
+                # Datos para plotear
+                plot_data = []
+                
+                # Línea 1: El Jugador (Azul Oscuro o similar)
+                for f in radar_feats_viz:
+                    plot_data.append({'Feature': f, 'Valor': player_norm[f], 'Tipo': f'1. Jugador: {selected_player_name}'})
+                
+                # Línea 2: Promedio de la PREDICCIÓN (Rojo/Naranja si es error, o color neutro)
+                for f in radar_feats_viz:
+                    plot_data.append({'Feature': f, 'Valor': avg_pred[f], 'Tipo': f'2. Promedio {prediction} (Predicho)'})
+                
+                # Línea 3 (Solo si hubo error): Promedio de la REALIDAD
+                if prediction != player_row['dom_pos']:
+                    avg_real = df_norm_radar[df_norm_radar['dom_pos'] == player_row['dom_pos']][radar_feats_viz].mean()
+                    for f in radar_feats_viz:
+                        plot_data.append({'Feature': f, 'Valor': avg_real[f], 'Tipo': f'3. Promedio {player_row["dom_pos"]} (Real)'})
+                
+                df_radar_plot = pd.DataFrame(plot_data)
+                
+                # GRÁFICO DE LÍNEAS (PERFIL)
+                # Reemplaza al Radar Chart que fallaba. Es más claro para comparar líneas.
+                c_profile = alt.Chart(df_radar_plot).mark_line(point=True, strokeWidth=3).encode(
+                    x=alt.X('Feature', title='Atributo', sort=radar_feats_viz),
+                    y=alt.Y('Valor', title='Percentil Relativo (0-1)', scale=alt.Scale(domain=[-0.1, 1.1])),
+                    color=alt.Color('Tipo', title='Comparación', scale=alt.Scale(scheme='category10')),
+                    tooltip=['Tipo', 'Feature', alt.Tooltip('Valor', format='.2%')]
+                ).properties(height=300)
+                
+                st.altair_chart(c_profile, use_container_width=True)
+                
+                if prediction != player_row['dom_pos']:
+                    st.warning(f"""
+                    **¿Por qué el error?**
+                    Observa el gráfico: La línea de **{selected_player_name}** sigue un patrón más parecido 
+                    a la línea de **{prediction}** que a la de su posición real. 
+                    Probablemente tenga estadísticas atípicas para su rol (ej: un Pivot que asiste mucho).
+                    """)
         
-        chart3 = alt.Chart(df_imp).mark_bar().encode(
-            y=alt.Y('Feature', sort='-x'),
-            x=alt.X('Importance', title='Importancia (Gini)'),
-            tooltip=['Feature', 'Importance']
-        ).properties(
-            title='Importancia de Features del Modelo Final'
-        )
-        
-        st.altair_chart(chart3, use_container_width=True)
+        except Exception as e:
+            st.error(f"No se pudo predecir para este jugador (datos faltantes en el CSV para el modelo): {e}")
