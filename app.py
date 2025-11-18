@@ -16,23 +16,24 @@ st.set_page_config(
 # Estas funciones deben ser idénticas a las definidas en el notebook de entrenamiento V4
 
 def calculate_age(df):
-    # Ojo: El pipeline en producción recibe arrays de numpy, hay que manejarlo
+    # ... (esta función calculate_age déjala como estaba) ...
     try:
-        # Intenta convertir asumiendo que es un DataFrame/Series o Array
         if isinstance(df, pd.DataFrame) or isinstance(df, pd.Series):
              birthdate = pd.to_datetime(df.iloc[:, 0], errors='coerce')
         else:
              birthdate = pd.to_datetime(df[:, 0], errors='coerce')
              
         today = datetime.datetime(2025, 10, 22)
-        # Manejo seguro de dt.days vs .days dependiendo del tipo de objeto
         age = (today - birthdate).dt.days / 365.25 if hasattr((today - birthdate), 'dt') else (today - birthdate).days / 365.25
         return age.values.reshape(-1, 1)
     except:
-        # Fallback básico por si el formato de entrada varía inesperadamente
         return np.zeros((len(df), 1))
 
-def calculate_stats_36min_from_acum(df_acum):
+# --- CORRECCIÓN: CAMBIAR EL NOMBRE DE LA FUNCIÓN ---
+# Antes se llamaba calculate_stats_36min_from_acum
+# Ahora le ponemos el nombre que pide el error: calculate_stats_36min
+
+def calculate_stats_36min(df_acum):
     # Reconstruimos el DF temporalmente con los nombres esperados por la logica
     column_names = ['points_acum', 'numMinutes_acum', 'reboundsTotal_acum', 'blocks_acum', 
                     'assists_acum', 'steals_acum', 'threePointersMade_acum', 'fieldGoalsMade_acum']
@@ -45,7 +46,7 @@ def calculate_stats_36min_from_acum(df_acum):
         stats.columns = column_names
 
     total_minutes = stats['numMinutes_acum']
-    # Evitar división por 0 reemplazando 0 por 1 (solo para el cálculo)
+    # Evitar división por 0
     total_minutes = total_minutes.replace(0, 1) 
 
     out_df = pd.DataFrame(index=stats.index)
