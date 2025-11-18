@@ -33,7 +33,7 @@ def calculate_age(df):
 # Antes se llamaba calculate_stats_36min_from_acum
 # Ahora le ponemos el nombre que pide el error: calculate_stats_36min
 
-def calculate_stats_36min(df_acum):
+def calculate_stats_36min_from_acum(df_acum):
     # Reconstruimos el DF temporalmente con los nombres esperados por la logica
     column_names = ['points_acum', 'numMinutes_acum', 'reboundsTotal_acum', 'blocks_acum', 
                     'assists_acum', 'steals_acum', 'threePointersMade_acum', 'fieldGoalsMade_acum']
