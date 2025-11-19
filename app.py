@@ -150,7 +150,7 @@ with tab_viz:
     
     st.divider()
     
-    st.markdown("### 2. Perfil Físico: Altura vs. Peso")
+    st.markdown("### 2. Perfil Físico y Técnico de cada posición")
     st.write("Usamos Coordenadas Paralelas para ver el perfil promedio de cada posición.")
     
     # Coordenadas Paralelas (Promedios)
