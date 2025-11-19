@@ -101,8 +101,8 @@ with tab_info:
 
         ### El Modelo
         Utilizamos un **Random Forest Classifier** optimizado.
-        * **Accuracy:** ~87%
-        * **F1-Score:** ~83%
+        * **Accuracy:** ~83%
+        * **F1-Score:** ~81%
         
         El modelo aprende patrones complejos: entiende que un Pivot no es solo "alguien alto", 
         sino alguien que rebotea eficientemente y anota cerca del aro.
