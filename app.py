@@ -135,39 +135,54 @@ with tab_viz:
     st.header("Explorando los Patrones")
     
     st.markdown("### 1. Roles de Juego: Asistencias vs. Rebotes")
-    st.write("Este gráfico separa claramente a los creadores de juego (Guardias) de los definidores interiores (Pivots).")
+    st.write("Este gráfico utiliza una escala logarítmica en el eje X para mejorar la visibilidad de la distribución, dado el amplio rango de las métricas.")
     
-    # Gráfico Boxplot Horizontal
+    # Gráfico Boxplot Horizontal (recreado de la entrega 4)
     c_base = alt.Chart(df_viz).mark_boxplot(extent='min-max', size=30).encode(
-        y=alt.Y('dom_pos', title=None),
+        y=alt.Y('dom_pos', title=None, sort=['G', 'F', 'C']),
         color=alt.Color('dom_pos', legend=None)
     ).properties(height=200)
-    
-    c1 = c_base.encode(x=alt.X('ast36Min', title='Asistencias p/36m')).properties(title='Distribución de Asistencias')
-    c2 = c_base.encode(x=alt.X('reb36Min', title='Rebotes p/36m')).properties(title='Distribución de Rebotes')
-    
+
+    # CORRECCIÓN 1: Aplicar escala logarítmica (o una escala no lineal) a X
+    c1 = c_base.encode(
+        x=alt.X('ast36Min', title='Asistencias p/36m (Escala Log)', scale=alt.Scale(type='log'))
+    ).properties(title='Distribución de Asistencias')
+
+    # CORRECCIÓN 2: Aplicar escala logarítmica (o una escala no lineal) a X
+    c2 = c_base.encode(
+        x=alt.X('reb36Min', title='Rebotes p/36m (Escala Log)', scale=alt.Scale(type='log'))
+    ).properties(title='Distribución de Rebotes')
+
     st.altair_chart(c1 | c2, use_container_width=True)
-    
+
     st.divider()
     
-    st.markdown("### 2. Perfil Físico y Técnico de cada posición")
-    st.write("Usamos Coordenadas Paralelas para ver el perfil promedio de cada posición.")
-    
-    # Coordenadas Paralelas (Promedios)
-    feats = ['height', 'bodyWeight', 'reb36Min', 'ast36Min', 'pts_from_3_36Min']
+    st.markdown("### 2. Perfil Físico y Técnico (Coordenadas Paralelas)")
+    st.write("Cada línea representa el perfil promedio de una posición, revelando la clara separación de roles.")
+
+    # CORRECCIÓN 1: Incluir Altura y Peso en la lista de features
+    feats = [
+        'height', 
+        'bodyWeight', 
+        'reb36Min', 
+        'blk36Min', 
+        'ast36Min', 
+        'pts_from_3_36Min'
+    ]
     df_norm = df_viz.copy()
+    # Normalizar los datos
     for f in feats:
         df_norm[f] = df_norm[f].rank(pct=True)
-    
+
     df_avg = df_norm.groupby('dom_pos')[feats].mean().reset_index().melt('dom_pos')
-    
+
     c_parallel = alt.Chart(df_avg).mark_line(point=True, strokeWidth=3).encode(
-        x=alt.X('variable', title='Atributo'),
-        y=alt.Y('value', title='Percentil (0-100%)', scale=alt.Scale(domain=[-0.1, 1.1])),
+        x=alt.X('variable', title='Atributo', sort=feats), # Usamos sort=feats para que salgan en el orden que queremos
+        y=alt.Y('value', title='Percentil (0-100%)', scale=alt.Scale(domain=[0.1, 1.1])), # Ajustamos el dominio para centrar
         color=alt.Color('dom_pos', title='Posición'),
         tooltip=['dom_pos', 'variable', alt.Tooltip('value', format='.2%')]
     ).properties(height=400).interactive()
-    
+
     st.altair_chart(c_parallel, use_container_width=True)
 
 
