@@ -172,7 +172,7 @@ with tab_viz:
 
 
 # ==============================================================================
-# PESTAÑA 3: PREDICCIÓN (SIMULADOR DE JUGADORES)
+# PESTAÑA 3: PREDICCIÓN (SIMULADOR DE JUGADORES) - CORREGIDA
 # ==============================================================================
 with tab_pred:
     st.header("Simulador de Predicción")
@@ -181,7 +181,6 @@ with tab_pred:
     # 1. Buscador de Jugador
     if 'full_name' in df_viz.columns:
         player_list = sorted(df_viz['full_name'].unique())
-        # Intentamos poner a LeBron por defecto si existe
         default_idx = player_list.index("LeBron James") if "LeBron James" in player_list else 0
         selected_player_name = st.selectbox("Seleccionar Jugador:", player_list, index=default_idx)
     else:
@@ -192,32 +191,75 @@ with tab_pred:
         # Obtener datos del jugador seleccionado
         player_row = df_viz[df_viz['full_name'] == selected_player_name].iloc[0]
         
-        # Mostrar ficha del jugador
+        # 2. Ficha y Métricas
+        st.subheader(f"Ficha: {selected_player_name}")
         col_a, col_b, col_c, col_d = st.columns(4)
         col_a.metric("Altura", f"{player_row['height']:.0f}\"")
         col_b.metric("Peso", f"{player_row['bodyWeight']:.0f} lbs")
         col_c.metric("Posición Real", player_row['dom_pos'])
         col_d.metric("Edad", f"{player_row['age']:.1f}")
 
-        # --- PREPARAR INPUT PARA EL MODELO ---
+        st.divider()
+
+        # --- INICIO: NUEVO GRÁFICO DE BARRAS (DATOS NO NORMALIZADOS) ---
+        st.subheader("Estadísticas de Perfil (Valores puros)")
+
+        # 1. Definir métricas y crear DataFrame
+        display_metrics = {
+            'Altura (in)': 'height',
+            'Peso (lbs)': 'bodyWeight',
+            'Edad (años)': 'age',
+            'Asistencias/36': 'ast36Min',
+            'Rebotes/36': 'reb36Min',
+            'Bloqueos/36': 'blk36Min',
+            'Pts. Dobles/36': 'pts_from_2_36Min',
+            'Pts. Triples/36': 'pts_from_3_36Min',
+            'Robos/36': 'stl36Min'
+        }
+        
+        bar_data = []
+        for display_name, col_name in display_metrics.items():
+            bar_data.append({
+                'Atributo': display_name,
+                'Valor': player_row[col_name],
+                'Tipo': player_row['dom_pos']
+            })
+        df_bar = pd.DataFrame(bar_data)
+
+        # 2. Crear el Gráfico de Barras
+        c_bar = alt.Chart(df_bar).mark_bar().encode(
+            # El valor va en el eje X
+            x=alt.X('Valor:Q', title='Valor (No Normalizado)'),
+            # El atributo va en el eje Y (ordenado por la lista)
+            y=alt.Y('Atributo:N', sort=list(display_metrics.keys()), title=None),
+            # Color por Posición Real
+            color=alt.Color('Tipo', title='Posición Real'),
+            # Tooltip con 2 decimales para precisión
+            tooltip=['Atributo', alt.Tooltip('Valor', format=',.2f')]
+        ).properties(
+            title=f"Estadísticas Clave de {selected_player_name}",
+            height=350
+        )
+        st.altair_chart(c_bar, use_container_width=True)
+        # --- FIN: NUEVO GRÁFICO DE BARRAS ---
+
+        # 3. Lógica de Predicción
         try:
             # Features requeridas por el pipeline (orden correcto)
-            # Deben estar en el CSV 'players_nba_clean_viz.csv' generado en el notebook
             input_features = [
                 'height', 'bodyWeight', 'birthdate',
                 'points_acum', 'numMinutes_acum', 'reboundsTotal_acum', 'blocks_acum', 
                 'assists_acum', 'steals_acum', 'threePointersMade_acum', 'fieldGoalsMade_acum'
             ]
             
-            # Extraemos valores y creamos un DF de 1 fila
             input_data = pd.DataFrame([player_row[input_features]])
             
-            # --- PREDICCIÓN ---
+            # PREDICCIÓN
             prediction = model.predict(input_data)[0]
             probs = model.predict_proba(input_data)[0]
             confidence = np.max(probs)
             
-            # --- MOSTRAR RESULTADO ---
+            # MOSTRAR RESULTADO
             st.divider()
             c_res1, c_res2 = st.columns([1, 2])
             
@@ -232,37 +274,28 @@ with tab_pred:
                 
                 st.progress(float(confidence), text=f"Confianza: {confidence:.1%}")
             
-            # --- ANÁLISIS DE ERROR (GRÁFICO DE PERFIL / COORDENADAS PARALELAS) ---
+            # ANÁLISIS DE ERROR (GRÁFICO DE PERFIL / COORDENADAS PARALELAS)
             with c_res2:
                 st.subheader("Análisis del Perfil")
-                st.write("Comparamos el perfil del jugador con el promedio de su posición real y la predicha.")
+                st.write("Comparamos el perfil del jugador (línea azul) con el promedio de su posición real y la predicha.")
                 
-                # 1. Features a comparar (normalizadas)
+                # ... (El código de Perfil Lineal va aquí, usando df_viz, ya que es el gráfico más robusto)
                 radar_feats_viz = ['height', 'reb36Min', 'blk36Min', 'ast36Min', 'pts_from_3_36Min']
-                
-                # Calcular percentiles globales para normalizar (0 a 1)
                 df_norm_radar = df_viz.copy()
                 for f in radar_feats_viz:
                     df_norm_radar[f] = df_norm_radar[f].rank(pct=True)
                 
-                # Datos del JUGADOR (normalizados)
-                player_norm = df_norm_radar[df_norm_radar['full_name'] == selected_player_name].iloc[0]
+                player_norm_data = df_norm_radar[df_norm_radar['full_name'] == selected_player_name].iloc[0]
                 
-                # Datos promedio de la Posición PREDICHA
-                avg_pred = df_norm_radar[df_norm_radar['dom_pos'] == prediction][radar_feats_viz].mean()
-                
-                # Datos para plotear
                 plot_data = []
-                
-                # Línea 1: El Jugador (Azul Oscuro o similar)
+                # Linea 1: Jugador
                 for f in radar_feats_viz:
-                    plot_data.append({'Feature': f, 'Valor': player_norm[f], 'Tipo': f'1. Jugador: {selected_player_name}'})
-                
-                # Línea 2: Promedio de la PREDICCIÓN (Rojo/Naranja si es error, o color neutro)
+                    plot_data.append({'Feature': f, 'Valor': player_norm_data[f], 'Tipo': f'1. Jugador: {selected_player_name}'})
+                # Linea 2: Promedio PREDICHO
+                avg_pred = df_norm_radar[df_norm_radar['dom_pos'] == prediction][radar_feats_viz].mean()
                 for f in radar_feats_viz:
                     plot_data.append({'Feature': f, 'Valor': avg_pred[f], 'Tipo': f'2. Promedio {prediction} (Predicho)'})
-                
-                # Línea 3 (Solo si hubo error): Promedio de la REALIDAD
+                # Linea 3 (Si hay error): Promedio REAL
                 if prediction != player_row['dom_pos']:
                     avg_real = df_norm_radar[df_norm_radar['dom_pos'] == player_row['dom_pos']][radar_feats_viz].mean()
                     for f in radar_feats_viz:
@@ -270,8 +303,6 @@ with tab_pred:
                 
                 df_radar_plot = pd.DataFrame(plot_data)
                 
-                # GRÁFICO DE LÍNEAS (PERFIL)
-                # Reemplaza al Radar Chart que fallaba. Es más claro para comparar líneas.
                 c_profile = alt.Chart(df_radar_plot).mark_line(point=True, strokeWidth=3).encode(
                     x=alt.X('Feature', title='Atributo', sort=radar_feats_viz),
                     y=alt.Y('Valor', title='Percentil Relativo (0-1)', scale=alt.Scale(domain=[-0.1, 1.1])),
@@ -285,9 +316,8 @@ with tab_pred:
                     st.warning(f"""
                     **¿Por qué el error?**
                     Observa el gráfico: La línea de **{selected_player_name}** sigue un patrón más parecido 
-                    a la línea de **{prediction}** que a la de su posición real. 
-                    Probablemente tenga estadísticas atípicas para su rol (ej: un Pivot que asiste mucho).
+                    a la línea de **{prediction}** que a la de su posición real, **{player_row['dom_pos']}**.
                     """)
         
         except Exception as e:
-            st.error(f"No se pudo predecir para este jugador (datos faltantes en el CSV para el modelo): {e}")
+            st.error(f"Error al predecir: {e}")
