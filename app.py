@@ -176,7 +176,7 @@ with tab_viz:
 # ==============================================================================
 with tab_pred:
     st.header("Simulador de Predicción")
-    st.markdown("Busca un jugador real de la base de datos para ver cómo lo clasifica el modelo.")
+    st.markdown("Busca un jugador real de la base de datos o selecciona un perfil simulado (VIP) para probar el modelo.")
     
     # 1. Buscador de Jugador
     if 'full_name' in df_viz.columns:
@@ -201,20 +201,18 @@ with tab_pred:
 
         st.divider()
 
-        # --- INICIO: NUEVO GRÁFICO DE BARRAS (DATOS NO NORMALIZADOS) ---
-        st.subheader("Estadísticas de Perfil (Valores puros)")
+        # --- INICIO: GRÁFICO DE BARRAS (ATRIBUTOS TÉCNICOS SOLAMENTE) ---
+        st.subheader("Estadísticas de Perfil (Valores puros por 36 min)")
 
         # 1. Definir métricas y crear DataFrame
+        # Quitamos: 'height', 'bodyWeight', 'age' para evitar redundancia con la ficha superior.
         display_metrics = {
-            'Altura (in)': 'height',
-            'Peso (lbs)': 'bodyWeight',
-            'Edad (años)': 'age',
             'Asistencias/36': 'ast36Min',
             'Rebotes/36': 'reb36Min',
             'Bloqueos/36': 'blk36Min',
+            'Robos/36': 'stl36Min',
             'Pts. Dobles/36': 'pts_from_2_36Min',
-            'Pts. Triples/36': 'pts_from_3_36Min',
-            'Robos/36': 'stl36Min'
+            'Pts. Triples/36': 'pts_from_3_36Min'
         }
         
         bar_data = []
@@ -238,7 +236,7 @@ with tab_pred:
             tooltip=['Atributo', alt.Tooltip('Valor', format=',.2f')]
         ).properties(
             title=f"Estadísticas Clave de {selected_player_name}",
-            height=350
+            height=300
         )
         st.altair_chart(c_bar, use_container_width=True)
         # --- FIN: NUEVO GRÁFICO DE BARRAS ---
@@ -252,7 +250,9 @@ with tab_pred:
                 'assists_acum', 'steals_acum', 'threePointersMade_acum', 'fieldGoalsMade_acum'
             ]
             
-            input_data = pd.DataFrame([player_row[input_features]])
+            # --- NOTA: Debemos extraer la 'birthdate' como un objeto datetime ---
+            input_data = player_row[input_features].to_frame().T
+            input_data['birthdate'] = pd.to_datetime(input_data['birthdate']) 
             
             # PREDICCIÓN
             prediction = model.predict(input_data)[0]
@@ -279,23 +279,29 @@ with tab_pred:
                 st.subheader("Análisis del Perfil")
                 st.write("Comparamos el perfil del jugador (línea azul) con el promedio de su posición real y la predicha.")
                 
-                # ... (El código de Perfil Lineal va aquí, usando df_viz, ya que es el gráfico más robusto)
+                # 1. Features a comparar (normalizadas)
                 radar_feats_viz = ['height', 'reb36Min', 'blk36Min', 'ast36Min', 'pts_from_3_36Min']
+                
+                # 2. Calcular percentiles globales para normalizar
                 df_norm_radar = df_viz.copy()
                 for f in radar_feats_viz:
                     df_norm_radar[f] = df_norm_radar[f].rank(pct=True)
                 
+                # 3. Datos del JUGADOR (normalizados)
                 player_norm_data = df_norm_radar[df_norm_radar['full_name'] == selected_player_name].iloc[0]
                 
                 plot_data = []
-                # Linea 1: Jugador
+                
+                # Línea 1: El Jugador (Azul Oscuro o similar)
                 for f in radar_feats_viz:
                     plot_data.append({'Feature': f, 'Valor': player_norm_data[f], 'Tipo': f'1. Jugador: {selected_player_name}'})
-                # Linea 2: Promedio PREDICHO
+                
+                # Línea 2: Promedio de la PREDICCIÓN
                 avg_pred = df_norm_radar[df_norm_radar['dom_pos'] == prediction][radar_feats_viz].mean()
                 for f in radar_feats_viz:
                     plot_data.append({'Feature': f, 'Valor': avg_pred[f], 'Tipo': f'2. Promedio {prediction} (Predicho)'})
-                # Linea 3 (Si hay error): Promedio REAL
+                
+                # Línea 3 (Solo si hubo error): Promedio de la REALIDAD
                 if prediction != player_row['dom_pos']:
                     avg_real = df_norm_radar[df_norm_radar['dom_pos'] == player_row['dom_pos']][radar_feats_viz].mean()
                     for f in radar_feats_viz:
@@ -303,6 +309,7 @@ with tab_pred:
                 
                 df_radar_plot = pd.DataFrame(plot_data)
                 
+                # GRÁFICO DE LÍNEAS (PERFIL)
                 c_profile = alt.Chart(df_radar_plot).mark_line(point=True, strokeWidth=3).encode(
                     x=alt.X('Feature', title='Atributo', sort=radar_feats_viz),
                     y=alt.Y('Valor', title='Percentil Relativo (0-1)', scale=alt.Scale(domain=[-0.1, 1.1])),
